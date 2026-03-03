@@ -40,7 +40,7 @@ export default defineConfig(({ mode }) => {
         autoInstall: true,
       }),
     ],
-    base: mode === "development" ? "/" : "./",
+    base: "/",
     server: {
       port: 8080,
     },
