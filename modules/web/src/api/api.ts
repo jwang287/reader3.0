@@ -87,30 +87,57 @@ const getBookContent = (
       chapterIndex,
   )
 
-// webSocket
+// webSocket with HTTP fallback
 const search = (
   searchKey: string,
   onReceive: (data: SeachBook[]) => void,
   onFinish: () => void,
 ) => {
-  const socket = new WebSocket(
-    new URL('searchBook', legado_webSocket_entry_point),
-  )
-  socket.onerror = wsOnError
+  // Try WebSocket first
+  try {
+    const socket = new WebSocket(
+      new URL('searchBook', legado_webSocket_entry_point),
+    )
+    socket.onerror = () => {
+      // Fallback to HTTP if WebSocket fails
+      httpSearch(searchKey, onReceive, onFinish)
+    }
 
-  socket.onopen = () => {
-    socket.send(`{"key":"${searchKey}"}`)
-  }
-  socket.onmessage = event => {
-    try {
-      onReceive(JSON.parse(event.data))
-      wsOnMessage?.call(socket, event)
-    } catch {
+    socket.onopen = () => {
+      socket.send(`{"key":"${searchKey}"}`)
+    }
+    socket.onmessage = event => {
+      try {
+        onReceive(JSON.parse(event.data))
+        wsOnMessage?.call(socket, event)
+      } catch {
+        onFinish()
+      }
+    }
+
+    socket.onclose = () => {
       onFinish()
     }
+  } catch {
+    // Fallback to HTTP
+    httpSearch(searchKey, onReceive, onFinish)
   }
+}
 
-  socket.onclose = () => {
+// HTTP fallback for search
+const httpSearch = async (
+  searchKey: string,
+  onReceive: (data: SeachBook[]) => void,
+  onFinish: () => void,
+) => {
+  try {
+    const { data } = await ajax.post<LeagdoApiResponse<SeachBook[]>>('searchBook', { key: searchKey })
+    if (data.isSuccess && data.data) {
+      onReceive(data.data)
+    }
+  } catch (error) {
+    console.error('Search error:', error)
+  } finally {
     onFinish()
   }
 }
@@ -142,29 +169,61 @@ const deleteSource = (data: Source[]) =>
     ? ajax.post<LeagdoApiResponse<string>>('deleteBookSources', data)
     : ajax.post<LeagdoApiResponse<string>>('deleteRssSources', data)
 
-// webSocket
+// webSocket with HTTP fallback
 const debug = (
   /** @type {string} */ sourceUrl: string,
   /** @type {string} */ searchKey: string,
   /** @type {(data: string) => void} */ onReceive: (data: string) => void,
   /** @type {() => void} */ onFinish: () => void,
 ) => {
-  const url = new URL(
-    `${isBookSource ? 'bookSource' : 'rssSource'}Debug`,
-    legado_webSocket_entry_point,
-  )
+  const endpoint = `${isBookSource ? 'bookSource' : 'rssSource'}Debug`
+  
+  try {
+    const url = new URL(endpoint, legado_webSocket_entry_point)
+    const socket = new WebSocket(url)
+    
+    socket.onerror = () => {
+      // Fallback to HTTP
+      httpDebug(endpoint, sourceUrl, searchKey, onReceive, onFinish)
+    }
+    
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ tag: sourceUrl, key: searchKey }))
+    }
+    socket.onmessage = event => {
+      onReceive(event.data)
+      wsOnMessage?.call(socket, event)
+    }
 
-  const socket = new WebSocket(url)
-  socket.onerror = wsOnError
-  socket.onopen = () => {
-    socket.send(JSON.stringify({ tag: sourceUrl, key: searchKey }))
+    socket.onclose = () => {
+      onFinish()
+    }
+  } catch {
+    // Fallback to HTTP
+    httpDebug(endpoint, sourceUrl, searchKey, onReceive, onFinish)
   }
-  socket.onmessage = event => {
-    onReceive(event.data)
-    wsOnMessage?.call(socket, event)
-  }
+}
 
-  socket.onclose = () => {
+// HTTP fallback for debug
+const httpDebug = async (
+  endpoint: string,
+  sourceUrl: string,
+  searchKey: string,
+  onReceive: (data: string) => void,
+  onFinish: () => void,
+) => {
+  try {
+    const { data } = await ajax.post<LeagdoApiResponse<string[]>>(endpoint, { 
+      tag: sourceUrl, 
+      key: searchKey 
+    })
+    if (data.isSuccess && data.data) {
+      data.data.forEach(log => onReceive(log))
+    }
+  } catch (error) {
+    console.error('Debug error:', error)
+    onReceive('调试出错: ' + String(error))
+  } finally {
     onFinish()
   }
 }
